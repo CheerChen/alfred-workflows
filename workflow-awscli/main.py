@@ -49,16 +49,66 @@ def execute_aws_command(command, cache_key):
     if os.path.exists(cache_file) and (time.time() - os.path.getmtime(cache_file)) < CACHE_EXPIRY:
         with open(cache_file, 'r') as f: return json.load(f)
     try:
-        result = subprocess.check_output(command, text=True, stderr=subprocess.DEVNULL)
+        result = subprocess.check_output(command, text=True, stderr=subprocess.PIPE)
         data = json.loads(result)
         with open(cache_file, 'w') as f: json.dump(data, f)
         return data
-    except (subprocess.CalledProcessError, json.JSONDecodeError): return None
+    except subprocess.CalledProcessError as e:
+        # --- VVVV  这是核心修改：捕获并识别 Token 过期错误 VVVV ---
+        error_output = e.stderr.strip()
+        # 检测多种 AWS SSO Token 过期的错误模式
+        token_expired_patterns = [
+            "Expired",
+            "expired"
+        ]
+        
+        if any(pattern in error_output for pattern in token_expired_patterns):
+            # 返回一个特殊的错误类型，以便 main 函数识别
+            return {"error": "ExpiredToken", "message": error_output}
+        else:
+            # 对于其他错误，仍然可以返回一个通用错误
+            return {"error": "AWSError", "message": error_output}
+        # --- ^^^^  修改结束 ^^^^ ---
+    except json.JSONDecodeError: 
+        return None
 
 def generate_alfred_item(title, subtitle, arg, uid, valid=True, autocomplete=None):
     item = {"uid": uid, "title": title, "subtitle": subtitle, "arg": arg, "valid": valid}
     if autocomplete: item["autocomplete"] = autocomplete
     return item
+
+def handle_aws_response(data, profile=None):
+    """
+    统一处理 AWS 响应，检查错误并返回相应的 Alfred items
+    返回: (is_error: bool, alfred_items: list)
+    """
+    if isinstance(data, dict) and "error" in data:
+        if data["error"] == "ExpiredToken":
+            # 如果有 profile，则生成带 profile 的命令
+            if profile:
+                sso_command = f"aws sso login --profile {profile}"
+                subtitle = f"Press Enter to copy 'aws sso login --profile {profile}' command to your clipboard."
+            else:
+                sso_command = "aws sso login"
+                subtitle = "Press Enter to copy 'aws sso login' command to your clipboard."
+                
+            error_item = generate_alfred_item(
+                title="AWS Session Expired",
+                subtitle=subtitle,
+                arg=sso_command,
+                uid="aws-sso-login",
+                valid=True
+            )
+        else:
+            error_item = generate_alfred_item(
+                title="❌ AWS CLI Error", 
+                subtitle=data.get("message", "Unknown error"), 
+                arg="error",
+                uid="aws-error",
+                valid=False
+            )
+        return True, [error_item]
+    return False, []
 
 def get_tag_name(tags):
     if not tags: return ""
@@ -69,6 +119,12 @@ def get_tag_name(tags):
 def search_ec2(profile, region, search_str):
     command = ['aws', 'ec2', 'describe-instances', '--profile', profile, '--region', region, '--query', 'Reservations[].Instances[]']
     instances = execute_aws_command(command, f"ec2_{profile}")
+    
+    # 使用统一的错误处理，传入 profile
+    is_error, error_items = handle_aws_response(instances, profile)
+    if is_error:
+        return error_items
+    
     results = []
     if not instances: return results
     for inst in instances:
@@ -81,6 +137,12 @@ def search_ec2(profile, region, search_str):
 def search_rds(profile, region, search_str):
     command = ['aws', 'rds', 'describe-db-instances', '--profile', profile, '--region', region, '--query', 'DBInstances[]']
     databases = execute_aws_command(command, f"rds_{profile}")
+    
+    # 使用统一的错误处理，传入 profile
+    is_error, error_items = handle_aws_response(databases, profile)
+    if is_error:
+        return error_items
+    
     results = []
     if not databases: return results
     for db in databases:
@@ -89,10 +151,15 @@ def search_rds(profile, region, search_str):
             results.append(generate_alfred_item(f"RDS: {db_id}", f"Status: {db.get('DBInstanceStatus')} | Engine: {db.get('Engine')}", f"https://{region}.console.aws.amazon.com/rds/home?region={region}#database:id={db_id};is-cluster=false", db_id))
     return results
 
-# 其他 search_xxx 函数与之前版本相同，为简洁省略，实际代码中应保留
 def search_lambda(profile, region, search_str):
     command = ['aws', 'lambda', 'list-functions', '--profile', profile, '--region', region, '--query', 'Functions[]']
     functions = execute_aws_command(command, f"lambda_{profile}")
+    
+    # 使用统一的错误处理，传入 profile
+    is_error, error_items = handle_aws_response(functions, profile)
+    if is_error:
+        return error_items
+    
     results = []
     if not functions: return results
     for func in functions:
@@ -104,6 +171,12 @@ def search_lambda(profile, region, search_str):
 def search_dynamodb(profile, region, search_str):
     command = ['aws', 'dynamodb', 'list-tables', '--profile', profile, '--region', region, '--query', 'TableNames[]']
     table_names = execute_aws_command(command, f"dynamodb_{profile}")
+    
+    # 使用统一的错误处理，传入 profile
+    is_error, error_items = handle_aws_response(table_names, profile)
+    if is_error:
+        return error_items
+    
     results = []
     if not table_names: return results
     for name in table_names:
@@ -114,6 +187,12 @@ def search_dynamodb(profile, region, search_str):
 def search_sfn(profile, region, search_str):
     command = ['aws', 'stepfunctions', 'list-state-machines', '--profile', profile, '--region', region, '--query', 'stateMachines[]']
     machines = execute_aws_command(command, f"sfn_{profile}")
+    
+    # 使用统一的错误处理，传入 profile
+    is_error, error_items = handle_aws_response(machines, profile)
+    if is_error:
+        return error_items
+    
     results = []
     if not machines: return results
     for machine in machines:
@@ -125,6 +204,12 @@ def search_sfn(profile, region, search_str):
 def search_secret(profile, region, search_str):
     command = ['aws', 'secretsmanager', 'list-secrets', '--profile', profile, '--region', region, '--query', 'SecretList[]']
     secrets = execute_aws_command(command, f"secret_{profile}")
+    
+    # 使用统一的错误处理，传入 profile
+    is_error, error_items = handle_aws_response(secrets, profile)
+    if is_error:
+        return error_items
+    
     results = []
     if not secrets: return results
     for secret in secrets:
