@@ -6,11 +6,29 @@ import os
 import time
 import hashlib
 
-# --- 配置 ---
-JIRA_USERNAME = os.getenv('JIRA_USERNAME')
-JIRA_BASE_URL = os.getenv('JIRA_BASE_URL')
-DEFAULT_JQL_PROJECT = f"project = {os.getenv('JIRA_PROJECT', 'DBRE')}"
-jira_type_value = os.getenv('JIRA_TYPE', 'タスク')
+def load_env_file():
+    """Load environment variables from .env file"""
+    env_vars = {}
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+    
+    if os.path.exists(env_path):
+        with open(env_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    env_vars[key.strip()] = value.strip()
+    
+    return env_vars
+
+# Load configuration from .env file
+env_config = load_env_file()
+
+# --- Configuration ---
+JIRA_USERNAME = env_config.get('JIRA_USERNAME')
+JIRA_BASE_URL = env_config.get('JIRA_BASE_URL')
+DEFAULT_JQL_PROJECT = f"project = {env_config.get('JIRA_PROJECT', 'DBRE')}"
+jira_type_value = env_config.get('JIRA_TYPE', 'タスク')
 DEFAULT_JQL_TYPE = f'Type = "{jira_type_value}"' if jira_type_value else ""
 CACHE_EXPIRY = 3600
 CACHE_DIR = os.getenv('alfred_workflow_data', os.path.expanduser('~/.alfred_workflow_data_jira'))
@@ -89,7 +107,7 @@ def generate_alfred_item(title, subtitle, arg, uid):
 
 def main():
     if not JIRA_USERNAME or not JIRA_BASE_URL:
-        error_item = generate_alfred_item(title="Workflow Configuration Error", subtitle="Please set JIRA_USERNAME and JIRA_BASE_URL in workflow variables [x]", arg="", uid="config-error")
+        error_item = generate_alfred_item(title="Workflow Configuration Error", subtitle="Please create .env file with JIRA_USERNAME and JIRA_BASE_URL (see .env.example)", arg="", uid="config-error")
         print(json.dumps({"items": [error_item]}))
         return
 
