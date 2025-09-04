@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>bundleid</key>
-	<string></string>
+	<string>com.cheerchen.jira.searcher</string>
 	<key>connections</key>
 	<dict>
 		<key>0D2F6E79-6BDF-4230-AE49-B26BBB9CD7D2</key>
@@ -21,7 +21,7 @@
 		</array>
 	</dict>
 	<key>createdby</key>
-	<string></string>
+	<string>cheerchen</string>
 	<key>description</key>
 	<string></string>
 	<key>disabled</key>
@@ -50,13 +50,13 @@
 				<key>queuedelaycustom</key>
 				<integer>5</integer>
 				<key>queuedelayimmediatelyinitially</key>
-				<true/>
+				<false/>
 				<key>queuedelaymode</key>
 				<integer>2</integer>
 				<key>queuemode</key>
 				<integer>1</integer>
 				<key>runningsubtext</key>
-				<string></string>
+				<string>Searching Jira for "{query}"...</string>
 				<key>script</key>
 				<string>python3 main.py "{query}"</string>
 				<key>scriptargtype</key>
@@ -66,7 +66,7 @@
 				<key>subtext</key>
 				<string></string>
 				<key>title</key>
-				<string></string>
+				<string>Jira Searcher</string>
 				<key>type</key>
 				<integer>0</integer>
 				<key>withspace</key>
