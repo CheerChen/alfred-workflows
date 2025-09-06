@@ -3,143 +3,245 @@
 
 import sys
 import json
-import urllib.request
 import urllib.parse
+import urllib.request
 from urllib.error import URLError
 import re
+import os
+import time
+import hashlib
 
-def build_query_string(params):
-    """构建查询字符串"""
-    return '?' + urllib.parse.urlencode(params)
+# 缓存配置
+# 缓存永不过期
+CACHE_DIR = os.getenv('alfred_workflow_data', os.path.expanduser('~/.alfred_workflow_data_kata'))
+if not os.path.exists(CACHE_DIR):
+    os.makedirs(CACHE_DIR)
 
-def google_translate_phonetic(text, src_lang='en', dest_lang='ja'):
-    """使用Google翻译API进行音译翻译"""
+def jisho_search(word):
+    """使用 Jisho API 搜索单词，带缓存功能"""
+    # 创建缓存键
+    cache_key = hashlib.md5(word.encode('utf-8')).hexdigest()
+    cache_file = os.path.join(CACHE_DIR, f"{cache_key}.json")
+    
+    # 检查缓存，永不过期
+    if os.path.exists(cache_file):
+        print(f"DEBUG: Loading from cache for '{word}'", file=sys.stderr)
+        with open(cache_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    
     try:
-        # Google Translate API endpoint
-        api_url = 'https://translate.googleapis.com/translate_a/single'
+        url = "https://jisho.org/api/v1/search/words?keyword=" + urllib.parse.quote(word)
         
-        # 尝试多种方法获取音译结果
-        methods = [
-            # 方法1: 直接翻译，但在单词前后加特殊标记引导音译
-            f"phonetic transcription of {text}",
-            # 方法3: 直接翻译（保留原方法作为备选）
-            text
-        ]
-        
-        for method_text in methods:
-            params = {
-                'client': 'gtx',
-                'dt': 't',
-                'sl': src_lang,
-                'tl': dest_lang,
-                'q': method_text.strip()
+        req = urllib.request.Request(
+            url,
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
             }
-            
-            url = api_url + build_query_string(params)
-            
-            req = urllib.request.Request(
-                url,
-                headers={
-                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-                }
-            )
-            
-            try:
-                with urllib.request.urlopen(req, timeout=10) as response:
-                    data = response.read().decode('utf-8')
-                    
-                data = data.replace("'", '\u2019')
-                result = json.loads(data)
-                
-                if result and result[0]:
-                    translated_parts = []
-                    for item in result[0]:
-                        if item[0]:
-                            translated_parts.append(item[0])
-                    
-                    translated_text = ''.join(translated_parts).strip()
-                    
-                    # 提取片假名
-                    katakana_matches = extract_katakana(translated_text)
-                    
-                    # 如果找到片假名且长度合理，返回结果
-                    if katakana_matches and any(len(k) >= 2 for k in katakana_matches):
-                        return translated_text
-                        
-            except:
-                continue
+        )
         
-        return "无法转换"
+        print(f"DEBUG: Fetching from Jisho API for '{word}'", file=sys.stderr)
+        start_time = time.time()
+        
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = response.read().decode('utf-8')
+            result = json.loads(data)
+            
+            end_time = time.time()
+            print(f"DEBUG: API request completed in {end_time - start_time:.3f} seconds", file=sys.stderr)
+            
+            if result and result.get('data'):
+                # 保存到缓存
+                with open(cache_file, 'w', encoding='utf-8') as f:
+                    json.dump(result['data'], f, ensure_ascii=False, indent=2)
+                return result['data']
+                
+        return None
         
     except Exception as e:
-        return f"翻译错误: {str(e)}"
+        print(f"Jisho API 错误: {str(e)}", file=sys.stderr)
+        return None
 
-def extract_katakana(text):
-    """提取文本中的片假名"""
-    # Katakana regex pattern (与原脚本相同的正则表达式)
-    katakana_pattern = r'[\u30A1-\u30FA\u30FD-\u30FF][\u3099\u309A\u30A1-\u30FF]*[\u3099\u309A\u30A1-\u30FA\u30FC-\u30FF]|[\uFF66-\uFF6F\uFF71-\uFF9D][\uFF65-\uFF9F]*[\uFF66-\uFF9F]'
-    katakana_matches = re.findall(katakana_pattern, text)
-    return katakana_matches
+def is_katakana_reading(reading):
+    """检查读音是否主要是片假名"""
+    if not reading:
+        return False
+    katakana_chars = len(re.findall(r'[\u30A1-\u30FA\u30FC-\u30FF]', reading))
+    total_chars = len(re.sub(r'[・\s]', '', reading))  # 排除中点和空格
+    return katakana_chars / total_chars >= 0.8 if total_chars > 0 else False
 
-def create_alfred_items(query):
-    """创建Alfred结果项"""
-    items = []
-    
-    if not query:
-        items.append({
-            "title": "英文转片假名",
-            "subtitle": "输入英文单词或短语来转换为片假名",
-            "icon": {"type": "default"}
-        })
-        return items
-    
-    # 方法1: 尝试音译翻译
-    translated = google_translate_phonetic(query, 'en', 'ja')
-    
-    if translated and not translated.startswith("翻译错误") and not translated.startswith("无法转换"):
-        katakana_list = extract_katakana(translated)
+def should_fetch_next_page(data, search_word, has_exact_match):
+    """判断是否需要获取下一页数据"""
+    # 如果第一页已经有精确匹配的结果，则不翻页
+    if has_exact_match:
+        print(f"DEBUG: Exact match found. No need for next page.", file=sys.stderr)
+        return False
         
-        if katakana_list:
-            # 主要结果：所有片假名
-            all_katakana = ''.join(katakana_list)
-            items.append({
-                "title": all_katakana,
-                "subtitle": f"'{query}' 的片假名音译",
-                "arg": all_katakana,
-                "icon": {"type": "default"}
-            })
+    if len(data) < 20:  # 第一页结果不足20个，说明没有下一页
+        return False
+    
+    # 统计高优先级条目（只有reading，没有word的片假名条目）
+    high_priority_count = 0
+    for entry in data:
+        if entry.get('japanese'):
+            japanese_entry = entry['japanese'][0]
+            if japanese_entry.get('reading') and not japanese_entry.get('word'):
+                # 检查是否是片假名
+                reading = japanese_entry.get('reading', '')
+                if is_katakana_reading(reading):
+                    high_priority_count += 1
+    
+    print(f"DEBUG: Found {high_priority_count} high-priority katakana entries in first page", file=sys.stderr)
+    # 如果高优先级条目少于5个，需要翻页
+    return high_priority_count < 5
+
+def jisho_search_with_pagination(word, page=1):
+    """使用 Jisho API 搜索单词，支持分页"""
+    cache_key = hashlib.md5(f"{word}_page_{page}".encode('utf-8')).hexdigest()
+    cache_file = os.path.join(CACHE_DIR, f"{cache_key}.json")
+
+    # 检查缓存，永不过期
+    if os.path.exists(cache_file):
+        print(f"DEBUG: Loading from cache for '{word}' page {page}", file=sys.stderr)
+        with open(cache_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+
+    try:
+        url = f"https://jisho.org/api/v1/search/words?keyword={urllib.parse.quote(word)}&page={page}"
+        
+        req = urllib.request.Request(
+            url,
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+            }
+        )
+        
+        print(f"DEBUG: Fetching from Jisho API for '{word}' page {page}", file=sys.stderr)
+        
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = response.read().decode('utf-8')
+            result = json.loads(data)
             
-            # 如果有多个片假名词，分别显示
-            if len(katakana_list) > 1:
-                for i, katakana in enumerate(katakana_list):
-                    items.append({
-                        "title": katakana,
-                        "subtitle": f"片假名部分 {i+1}",
-                        "arg": katakana,
-                        "icon": {"type": "default"}
-                    })
+            if result and result.get('data'):
+                # 保存到缓存
+                with open(cache_file, 'w', encoding='utf-8') as f:
+                    json.dump(result['data'], f, ensure_ascii=False, indent=2)
+                return result['data']
+                
+        return None
+        
+    except Exception as e:
+        print(f"Jisho API 错误 (page {page}): {str(e)}", file=sys.stderr)
+        return None
+
+def main(query):
+    """主函数"""
+    start_total_time = time.time()
     
-    # 如果没有任何结果
+    data = jisho_search(query)
+    
+    if not data:
+        print(json.dumps({"items": [{"title": "Not Found", "subtitle": "No results for '{}'".format(query)}]}))
+        return
+
+    # 检查第一页是否有精确匹配（音译词汇）
+    has_exact_match = False
+    for entry in data:
+        if not entry.get('japanese') or not entry.get('senses'):
+            continue
+        
+        japanese_entry = entry['japanese'][0]
+        reading = japanese_entry.get('reading', '')
+        
+        if is_katakana_reading(reading) and not japanese_entry.get('word'):
+            english_definitions = entry['senses'][0].get('english_definitions', [])
+            
+            # 检查是否是直接音译词汇的标准：
+            # 1. 有且仅有一个定义且完全匹配查询词
+            # 2. 或者是较长的片假名（4+字符）且定义中有完全匹配项
+            for definition in english_definitions:
+                if query.lower() == definition.lower():
+                    # 严格标准：只有单一定义的情况才认为是音译词
+                    if len(english_definitions) == 1:
+                        has_exact_match = True
+                        print(f"DEBUG: Found transliteration match: {reading} = {definition}", file=sys.stderr)
+                        break
+                    # 或者是长片假名词汇（更可能是音译）
+                    elif len(reading) >= 4:
+                        has_exact_match = True
+                        print(f"DEBUG: Found long katakana match: {reading} = {definition}", file=sys.stderr)
+                        break
+                    else:
+                        print(f"DEBUG: Found semantic match, not transliteration: {reading} = {definition} ({len(english_definitions)} definitions)", file=sys.stderr)
+        if has_exact_match:
+            break
+            
+    # 根据情况决定是否获取下一页
+    if should_fetch_next_page(data, query, has_exact_match):
+        print(f"DEBUG: Fetching next page for '{query}'", file=sys.stderr)
+        next_page_data = jisho_search_with_pagination(query, page=2)
+        if next_page_data:
+            data.extend(next_page_data)
+
+    items = []
+    seen_readings = set()
+    
+    # 增加排序逻辑：精确匹配的条目优先
+    sorted_data = sorted(data, key=lambda entry: (
+        not (
+            is_katakana_reading(entry.get('japanese', [{}])[0].get('reading', '')) and
+            not entry.get('japanese', [{}])[0].get('word') and
+            any(
+                query.lower() == definition.lower() or definition.lower().startswith(query.lower())
+                for definition in entry.get('senses', [{}])[0].get('english_definitions', [])
+            )
+        ),
+        # 其他排序条件可以加在这里
+    ))
+
+    for entry in sorted_data:
+        if not entry.get('japanese'):
+            continue
+            
+        japanese_entry = entry['japanese'][0]
+        reading = japanese_entry.get('reading', '')
+        
+        # 仅处理纯片假名读音且无汉字写法的条目
+        if is_katakana_reading(reading) and not japanese_entry.get('word'):
+            if reading not in seen_readings:
+                subtitle = ""
+                if entry.get('senses'):
+                    senses = entry['senses'][0]
+                    parts_of_speech = ", ".join(senses.get('parts_of_speech', []))
+                    english_definitions = "; ".join(senses.get('english_definitions', []))
+                    
+                    subtitle_parts = []
+                    if parts_of_speech:
+                        subtitle_parts.append(f"[{parts_of_speech}]")
+                    if english_definitions:
+                        subtitle_parts.append(english_definitions)
+                    subtitle = " ".join(subtitle_parts)
+
+                items.append({
+                    "title": reading,
+                    "subtitle": subtitle,
+                    "arg": reading,
+                    "text": {
+                        "copy": reading,
+                        "largetype": reading
+                    }
+                })
+                seen_readings.add(reading)
+
     if not items:
-        items.append({
-            "title": "无法转换",
-            "subtitle": f"无法将 '{query}' 转换为片假名，请尝试其他单词",
-            "icon": {"type": "error"}
-        })
-    
-    return items
+        items.append({"title": "No Katakana Found", "subtitle": "Could not find a Katakana reading for '{}'".format(query)})
 
-def main():
-    # Get query from Alfred
-    query = sys.argv[1] if len(sys.argv) > 1 else ""
+    print(json.dumps({"items": items}))
     
-    # Create Alfred Script Filter JSON output
-    result = {
-        "items": create_alfred_items(query)
-    }
-    
-    # Output JSON for Alfred
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    end_total_time = time.time()
+    print(f"DEBUG: Total execution time: {end_total_time - start_total_time:.3f} seconds", file=sys.stderr)
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    if len(sys.argv) > 1:
+        main(sys.argv[1])
+    else:
+        print(json.dumps({"items": [{"title": "请输入英文单词进行查询"}]}))
