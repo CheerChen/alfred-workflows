@@ -59,7 +59,12 @@ def execute_aws_command(command, cache_key):
         # 检测多种 AWS SSO Token 过期的错误模式
         token_expired_patterns = [
             "Expired",
-            "expired"
+            "expired",
+            "Token for",
+            "does not exist",
+            "Error loading SSO Token",
+            "SSO session",
+            "No credentials"
         ]
         
         if any(pattern in error_output for pattern in token_expired_patterns):
@@ -72,9 +77,24 @@ def execute_aws_command(command, cache_key):
     except json.JSONDecodeError: 
         return None
 
-def generate_alfred_item(title, subtitle, arg, uid, valid=True, autocomplete=None):
-    item = {"uid": uid, "title": title, "subtitle": subtitle, "arg": arg, "valid": valid}
-    if autocomplete: item["autocomplete"] = autocomplete
+def generate_alfred_item(title, subtitle, arg, uid, mods=None, valid=True, autocomplete=None):
+    """
+    生成一个 Alfred item。
+    新增 mods 参数，用于处理修饰键（Cmd, Alt, etc.）。
+    """
+    item = {
+        "uid": uid,
+        "title": title,
+        "subtitle": subtitle,
+        "arg": arg,
+        "valid": valid
+    }
+    if autocomplete:
+        item["autocomplete"] = autocomplete
+    # --- VVVV 新增逻辑 VVVV ---
+    if mods:
+        item["mods"] = mods
+    # --- ^^^^ 新增逻辑结束 ^^^^ ---
     return item
 
 def handle_aws_response(data, profile=None):
@@ -87,10 +107,10 @@ def handle_aws_response(data, profile=None):
             # 如果有 profile，则生成带 profile 的命令
             if profile:
                 sso_command = f"aws sso login --profile {profile}"
-                subtitle = f"Press Enter to copy 'aws sso login --profile {profile}' command to your clipboard."
+                subtitle = f"Press Enter to run 'aws sso login --profile {profile}'"
             else:
                 sso_command = "aws sso login"
-                subtitle = "Press Enter to copy 'aws sso login' command to your clipboard."
+                subtitle = "Press Enter to run 'aws sso login'"
                 
             error_item = generate_alfred_item(
                 title="AWS Session Expired",
@@ -116,107 +136,144 @@ def get_tag_name(tags):
         if tag.get('Key') == 'Name': return tag.get('Value', '')
     return ""
 
-def search_ec2(profile, region, search_str):
-    command = ['aws', 'ec2', 'describe-instances', '--profile', profile, '--region', region, '--query', 'Reservations[].Instances[]']
-    instances = execute_aws_command(command, f"ec2_{profile}")
+def search_aws_resources(service, profile, region, search_str):
+    """
+    通用的AWS资源搜索函数，减少代码重复
+    """
+    # 定义每个服务的配置
+    service_configs = {
+        'ec2': {
+            'command': ['aws', 'ec2', 'describe-instances', '--profile', profile, '--region', region, '--query', 'Reservations[].Instances[]'],
+            'url_template': f"https://{region}.console.aws.amazon.com/ec2/v2/home?region={region}#InstanceDetails:instanceId={{id}}",
+            'extract_items': lambda data: data if data else [],
+            'get_item_data': lambda item: {
+                'id': item.get('InstanceId', 'N/A'),
+                'name': get_tag_name(item.get('Tags', [])),
+                'extra_info': f"State: {item.get('State', {}).get('Name', 'N/A')}"
+            }
+        },
+        'rds': {
+            'command': ['aws', 'rds', 'describe-db-instances', '--profile', profile, '--region', region, '--query', 'DBInstances[]'],
+            'url_template': f"https://{region}.console.aws.amazon.com/rds/home?region={region}#database:id={{id}};is-cluster=false",
+            'extract_items': lambda data: data if data else [],
+            'get_item_data': lambda item: {
+                'id': item.get('DBInstanceIdentifier'),
+                'name': item.get('DBInstanceIdentifier'),
+                'extra_info': f"Status: {item.get('DBInstanceStatus')} | Engine: {item.get('Engine')}"
+            }
+        },
+        'lambda': {
+            'command': ['aws', 'lambda', 'list-functions', '--profile', profile, '--region', region, '--query', 'Functions[]'],
+            'url_template': f"https://{region}.console.aws.amazon.com/lambda/home?region={region}#/functions/{{id}}?tab=code",
+            'extract_items': lambda data: data if data else [],
+            'get_item_data': lambda item: {
+                'id': item.get('FunctionName'),
+                'name': item.get('FunctionName'),
+                'extra_info': f"Runtime: {item.get('Runtime')}"
+            }
+        },
+        'dynamo': {
+            'command': ['aws', 'dynamodb', 'list-tables', '--profile', profile, '--region', region, '--query', 'TableNames[]'],
+            'url_template': f"https://{region}.console.aws.amazon.com/dynamodbv2/home?region={region}#table?name={{id}}&tab=overview",
+            'extract_items': lambda data: data if data else [],
+            'get_item_data': lambda item: {
+                'id': item,
+                'name': item,
+                'extra_info': f"Table Name: {item}"
+            }
+        },
+        'sfn': {
+            'command': ['aws', 'stepfunctions', 'list-state-machines', '--profile', profile, '--region', region, '--query', 'stateMachines[]'],
+            'url_template': f"https://{region}.console.aws.amazon.com/states/home?region={region}#/statemachines/view/{{id}}",
+            'extract_items': lambda data: data if data else [],
+            'get_item_data': lambda item: {
+                'id': item.get('stateMachineArn'),
+                'name': item.get('name'),
+                'extra_info': f"ARN: {item.get('stateMachineArn')}"
+            }
+        },
+        'secret': {
+            'command': ['aws', 'secretsmanager', 'list-secrets', '--profile', profile, '--region', region, '--query', 'SecretList[]'],
+            'url_template': f"https://{region}.console.aws.amazon.com/secretsmanager/secret?name={{id}}&region={region}",
+            'extract_items': lambda data: data if data else [],
+            'get_item_data': lambda item: {
+                'id': item.get('Name'),
+                'name': item.get('Name'),
+                'extra_info': f"Secret Name: {item.get('Name')}"
+            }
+        }
+    }
     
-    # 使用统一的错误处理，传入 profile
-    is_error, error_items = handle_aws_response(instances, profile)
+    if service not in service_configs:
+        return [generate_alfred_item(f"Service '{service}' not supported", "", service, service, False)]
+    
+    config = service_configs[service]
+    
+    # 执行AWS命令
+    data = execute_aws_command(config['command'], f"{service}_{profile}")
+    
+    # 使用统一的错误处理
+    is_error, error_items = handle_aws_response(data, profile)
     if is_error:
         return error_items
     
+    # 提取资源列表
+    items = config['extract_items'](data)
+    if not items:
+        return []
+    
     results = []
-    if not instances: return results
-    for inst in instances:
-        instance_id = inst.get('InstanceId', 'N/A')
-        name = get_tag_name(inst.get('Tags', []))
-        if not search_str or search_str.lower() in name.lower() or search_str.lower() in instance_id.lower():
-            results.append(generate_alfred_item(f"EC2: {name or instance_id}", f"ID: {instance_id} | State: {inst.get('State', {}).get('Name', 'N/A')}", f"https://{region}.console.aws.amazon.com/ec2/v2/home?region={region}#InstanceDetails:instanceId={instance_id}", instance_id))
+    for item in items:
+        item_data = config['get_item_data'](item)
+        
+        # 过滤搜索结果
+        if search_str:
+            search_lower = search_str.lower()
+            if not (search_lower in (item_data['name'] or '').lower() or 
+                   search_lower in (item_data['id'] or '').lower()):
+                continue
+        
+        # 生成控制台URL
+        destination_url = config['url_template'].format(id=item_data['id'])
+        
+        # 创建修饰键配置 - Cmd+Enter 复制URL到剪贴板
+        mods = {
+            "cmd": {
+                "valid": True,
+                "arg": destination_url,
+                "subtitle": "⌘ Hold Cmd+Enter to copy URL to clipboard"
+            }
+        }
+        
+        # 生成Alfred项目
+        results.append(generate_alfred_item(
+            title=f"{service.upper()}: {item_data['name'] or item_data['id']}",
+            subtitle=f"{item_data['extra_info']} | Press Enter to open",
+            arg=destination_url,
+            uid=item_data['id'],
+            mods=mods
+        ))
+    
     return results
+
+# 为了向后兼容，保留原有的函数名
+def search_ec2(profile, region, search_str):
+    return search_aws_resources('ec2', profile, region, search_str)
 
 def search_rds(profile, region, search_str):
-    command = ['aws', 'rds', 'describe-db-instances', '--profile', profile, '--region', region, '--query', 'DBInstances[]']
-    databases = execute_aws_command(command, f"rds_{profile}")
-    
-    # 使用统一的错误处理，传入 profile
-    is_error, error_items = handle_aws_response(databases, profile)
-    if is_error:
-        return error_items
-    
-    results = []
-    if not databases: return results
-    for db in databases:
-        db_id = db.get('DBInstanceIdentifier')
-        if not search_str or search_str.lower() in db_id.lower():
-            results.append(generate_alfred_item(f"RDS: {db_id}", f"Status: {db.get('DBInstanceStatus')} | Engine: {db.get('Engine')}", f"https://{region}.console.aws.amazon.com/rds/home?region={region}#database:id={db_id};is-cluster=false", db_id))
-    return results
+    return search_aws_resources('rds', profile, region, search_str)
 
 def search_lambda(profile, region, search_str):
-    command = ['aws', 'lambda', 'list-functions', '--profile', profile, '--region', region, '--query', 'Functions[]']
-    functions = execute_aws_command(command, f"lambda_{profile}")
-    
-    # 使用统一的错误处理，传入 profile
-    is_error, error_items = handle_aws_response(functions, profile)
-    if is_error:
-        return error_items
-    
-    results = []
-    if not functions: return results
-    for func in functions:
-        func_name = func.get('FunctionName')
-        if not search_str or search_str.lower() in func_name.lower():
-            results.append(generate_alfred_item(f"Lambda: {func_name}", f"Runtime: {func.get('Runtime')}", f"https://{region}.console.aws.amazon.com/lambda/home?region={region}#/functions/{func_name}?tab=code", func_name))
-    return results
+    return search_aws_resources('lambda', profile, region, search_str)
 
 def search_dynamodb(profile, region, search_str):
-    command = ['aws', 'dynamodb', 'list-tables', '--profile', profile, '--region', region, '--query', 'TableNames[]']
-    table_names = execute_aws_command(command, f"dynamodb_{profile}")
-    
-    # 使用统一的错误处理，传入 profile
-    is_error, error_items = handle_aws_response(table_names, profile)
-    if is_error:
-        return error_items
-    
-    results = []
-    if not table_names: return results
-    for name in table_names:
-        if not search_str or search_str.lower() in name.lower():
-            results.append(generate_alfred_item(f"DynamoDB: {name}", f"Table Name: {name}", f"https://{region}.console.aws.amazon.com/dynamodbv2/home?region={region}#table?name={name}&tab=overview", name))
-    return results
-    
+    return search_aws_resources('dynamo', profile, region, search_str)
+
 def search_sfn(profile, region, search_str):
-    command = ['aws', 'stepfunctions', 'list-state-machines', '--profile', profile, '--region', region, '--query', 'stateMachines[]']
-    machines = execute_aws_command(command, f"sfn_{profile}")
-    
-    # 使用统一的错误处理，传入 profile
-    is_error, error_items = handle_aws_response(machines, profile)
-    if is_error:
-        return error_items
-    
-    results = []
-    if not machines: return results
-    for machine in machines:
-        name, arn = machine.get('name'), machine.get('stateMachineArn')
-        if not search_str or search_str.lower() in name.lower():
-            results.append(generate_alfred_item(f"Step Function: {name}", f"ARN: {arn}", f"https://{region}.console.aws.amazon.com/states/home?region={region}#/statemachines/view/{arn}", arn))
-    return results
+    return search_aws_resources('sfn', profile, region, search_str)
 
 def search_secret(profile, region, search_str):
-    command = ['aws', 'secretsmanager', 'list-secrets', '--profile', profile, '--region', region, '--query', 'SecretList[]']
-    secrets = execute_aws_command(command, f"secret_{profile}")
-    
-    # 使用统一的错误处理，传入 profile
-    is_error, error_items = handle_aws_response(secrets, profile)
-    if is_error:
-        return error_items
-    
-    results = []
-    if not secrets: return results
-    for secret in secrets:
-        name = secret.get('Name')
-        if not search_str or search_str.lower() in name.lower():
-            results.append(generate_alfred_item(f"Secret: {name}", f"Secret Name: {name}", f"https://{region}.console.aws.amazon.com/secretsmanager/secret?name={name}&region={region}", name))
-    return results
+    return search_aws_resources('secret', profile, region, search_str)
 # --------------------------------------------------------
 
 # --- ++ 主逻辑 (大幅增强) ++ ---
