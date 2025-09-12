@@ -20,9 +20,9 @@
 			</dict>
 			<dict>
 				<key>destinationuid</key>
-				<string>91014A24-ECD6-4294-8352-F8C2DCF50C10</string>
+				<string>FD58DF91-CBE4-49CE-AB98-46EE5EE87722</string>
 				<key>modifiers</key>
-				<integer>0</integer>
+				<integer>1048576</integer>
 				<key>modifiersubtext</key>
 				<string></string>
 				<key>vitoclose</key>
@@ -97,10 +97,18 @@
 				<key>escaping</key>
 				<integer>102</integer>
 				<key>script</key>
-				<string>if [[ "{query}" == http* ]]; then
+				<string># 统一处理脚本：根据输入类型执行不同操作
 
-PROFILE=$(awk -F= '/^CHROME_PROFILE=/ {print $2}' ".env"); open -a "Google Chrome" -n --args --profile-directory="${PROFILE:-Default}" "{query}"
-
+if [[ "{query}" == http* ]]; then
+    # 处理 HTTP URLs - 在指定的 Chrome Profile 中打开
+    PROFILE=$(awk -F= '/^CHROME_PROFILE=/ {print $2}' ".env" 2&gt;/dev/null)
+    open -a "Google Chrome" -n --args --profile-directory="${PROFILE:-Default}" "{query}"
+    
+elif [[ "{query}" == aws* ]]; then
+    # 处理 AWS SSO 登录命令
+    echo "Executing: {query}"
+    {query}
+    
 fi</string>
 				<key>scriptargtype</key>
 				<integer>0</integer>
@@ -120,7 +128,7 @@ fi</string>
 			<key>config</key>
 			<dict>
 				<key>autopaste</key>
-				<false/>
+				<true/>
 				<key>clipboardtext</key>
 				<string>{query}</string>
 				<key>ignoredynamicplaceholders</key>
@@ -131,7 +139,7 @@ fi</string>
 			<key>type</key>
 			<string>alfred.workflow.output.clipboard</string>
 			<key>uid</key>
-			<string>91014A24-ECD6-4294-8352-F8C2DCF50C10</string>
+			<string>FD58DF91-CBE4-49CE-AB98-46EE5EE87722</string>
 			<key>version</key>
 			<integer>3</integer>
 		</dict>
@@ -154,12 +162,12 @@ fi</string>
 			<key>ypos</key>
 			<real>150</real>
 		</dict>
-		<key>91014A24-ECD6-4294-8352-F8C2DCF50C10</key>
+		<key>FD58DF91-CBE4-49CE-AB98-46EE5EE87722</key>
 		<dict>
 			<key>xpos</key>
 			<real>380</real>
 			<key>ypos</key>
-			<real>285</real>
+			<real>320</real>
 		</dict>
 	</dict>
 	<key>userconfigurationconfig</key>
