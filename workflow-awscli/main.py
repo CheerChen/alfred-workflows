@@ -13,7 +13,8 @@ AVAILABLE_SERVICES = {
     "lambda": " Lambda functions",
     "dynamo": " DynamoDB tables",
     "sfn": " Step Functions",
-    "secret": " Secrets Manager"
+    "secret": " Secrets Manager",
+    "role": " IAM Roles"
 }
 
 AVAILABLE_PROFILES = {
@@ -201,6 +202,16 @@ def search_aws_resources(service, profile, region, search_str):
                 'name': item.get('Name'),
                 'extra_info': f"Secret Name: {item.get('Name')}"
             }
+        },
+        'role': {
+            'command': ['aws', 'iam', 'list-roles', '--profile', profile, '--query', 'Roles[]'],
+            'url_template': f"https://console.aws.amazon.com/iam/home#/roles/{{id}}",
+            'extract_items': lambda data: data if data else [],
+            'get_item_data': lambda item: {
+                'id': item.get('RoleName'),
+                'name': item.get('RoleName'),
+                'extra_info': f"Path: {item.get('Path', '/')} | Created: {item.get('CreateDate', 'N/A')[:10] if item.get('CreateDate') else 'N/A'}"
+            }
         }
     }
     
@@ -274,6 +285,9 @@ def search_sfn(profile, region, search_str):
 
 def search_secret(profile, region, search_str):
     return search_aws_resources('secret', profile, region, search_str)
+
+def search_role(profile, region, search_str):
+    return search_aws_resources('role', profile, region, search_str)
 # --------------------------------------------------------
 
 # --- ++ 主逻辑 (大幅增强) ++ ---
@@ -327,7 +341,8 @@ def main():
                 'lambda': search_lambda, 
                 'sfn': search_sfn, 
                 'dynamo': search_dynamodb, 
-                'secret': search_secret
+                'secret': search_secret,
+                'role': search_role
                 }
             
             search_function = service_map.get(service)
