@@ -17,7 +17,6 @@ AVAILABLE_SERVICES = {
     "secret": " Secrets Manager",
     "role": " IAM Roles",
     "s3": " S3 buckets",
-    "auditlog": " CloudWatch log groups",
     "sqs": " SQS queues"
 }
 
@@ -141,16 +140,6 @@ def get_tag_name(tags):
         if tag.get('Key') == 'Name': return tag.get('Value', '')
     return ""
 
-def encode_cloudwatch_log_group(log_group_name):
-    """
-    CloudWatch log group URLs encode `/` twice and swap `%` with `$`.
-    """
-    if not log_group_name:
-        return ""
-    once_encoded = urllib.parse.quote(log_group_name, safe='')
-    twice_encoded = urllib.parse.quote(once_encoded, safe='')
-    return twice_encoded.replace('%', '$')
-
 def search_aws_resources(service, profile, region, search_str):
     """
     通用的AWS资源搜索函数，减少代码重复
@@ -237,17 +226,6 @@ def search_aws_resources(service, profile, region, search_str):
                 'extra_info': f"Created: {item.get('CreationDate', '')[:10] if item.get('CreationDate') else 'N/A'}"
             }
         },
-        'auditlog': {
-            'command': ['aws', 'logs', 'describe-log-groups', '--profile', profile, '--region', region, '--query', 'logGroups[]', '--no-paginate'],
-            'url_template': f"https://{region}.console.aws.amazon.com/cloudwatch/home?region={region}#logsV2:log-groups/log-group/{{encoded_id}}",
-            'extract_items': lambda data: data if data else [],
-            'get_item_data': lambda item: {
-                'id': item.get('logGroupArn'),
-                'name': item.get('logGroupName'),
-                'extra_info': f"Retention: {item.get('retentionInDays', 'N/A')} days | Stored bytes: {item.get('storedBytes', 0)}",
-                'encoded_id': encode_cloudwatch_log_group(item.get('logGroupName'))
-            }
-        },
         'sqs': {
             'command': ['aws', 'sqs', 'list-queues', '--profile', profile, '--region', region, '--query', 'QueueUrls[]'],
             'url_template': f"https://{region}.console.aws.amazon.com/sqs/v2/home?region={region}#/queues/{{encoded_id}}",
@@ -267,7 +245,8 @@ def search_aws_resources(service, profile, region, search_str):
     config = service_configs[service]
     
     # 执行AWS命令
-    data = execute_aws_command(config['command'], f"{service}_{profile}")
+    cache_key_region = region or "global"
+    data = execute_aws_command(config['command'], f"{service}_{profile}_{cache_key_region}")
     
     # 使用统一的错误处理
     is_error, error_items = handle_aws_response(data, profile)
@@ -295,8 +274,20 @@ def search_aws_resources(service, profile, region, search_str):
             id=item_data.get('id', ''),
             region=region,
             encoded_id=item_data.get('encoded_id', ''),
-            name=item_data.get('name', '')
+            name=item_data.get('name', ''),
+            source_type=item_data.get('source_type', 'instance')
         )
+        open_arg_template = config.get('open_arg_template')
+        if open_arg_template:
+            open_arg = open_arg_template.format(
+                id=item_data.get('id', ''),
+                region=region,
+                encoded_id=item_data.get('encoded_id', ''),
+                name=item_data.get('name', ''),
+                source_type=item_data.get('source_type', 'instance')
+            )
+        else:
+            open_arg = config.get('open_arg', destination_url)
         
         # 创建修饰键配置 - Cmd+Enter 复制URL到剪贴板
         mods = {
@@ -311,8 +302,8 @@ def search_aws_resources(service, profile, region, search_str):
         results.append(generate_alfred_item(
             title=f"{service.upper()}: {item_data['name'] or item_data['id']}",
             subtitle=f"{item_data['extra_info']} | Press Enter to open",
-            arg=destination_url,
-            uid=item_data['id'],
+            arg=open_arg,
+            uid=item_data.get('id') or item_data.get('name') or destination_url,
             mods=mods
         ))
     
@@ -342,9 +333,6 @@ def search_role(profile, region, search_str):
 
 def search_s3(profile, region, search_str):
     return search_aws_resources('s3', profile, region, search_str)
-
-def search_auditlog(profile, region, search_str):
-    return search_aws_resources('auditlog', profile, region, search_str)
 
 def search_sqs(profile, region, search_str):
     return search_aws_resources('sqs', profile, region, search_str)
@@ -404,7 +392,6 @@ def main():
                 'secret': search_secret,
                 'role': search_role,
                 's3': search_s3,
-                'auditlog': search_auditlog,
                 'sqs': search_sqs
                 }
             
