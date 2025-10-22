@@ -34,7 +34,10 @@ DEFAULT_REGION = "ap-northeast-1"
 CACHE_EXPIRY = 3600
 # ----------------
 
-query_str = sys.argv[1]
+try:
+    query_str = sys.argv[1]
+except IndexError:
+    query_str = ""
 
 CACHE_DIR = os.getenv('alfred_workflow_data', os.path.expanduser('~/.alfred_workflow_data'))
 if not os.path.exists(CACHE_DIR):
@@ -375,31 +378,37 @@ def main():
                 ))
 
     # --- 阶段3：用户已选择 Service 和 Profile，执行真正的搜索 ---
-    elif num_parts >= 2:
-        service, profile = query_parts[0], query_parts[1]
-        search_str = " ".join(query_parts[2:])
-
-        if service not in AVAILABLE_SERVICES or profile not in AVAILABLE_PROFILES:
-             alfred_items.append(generate_alfred_item("Invalid Input", "Please select a valid service and profile", query_str, query_str, False))
+    elif num_parts >= 1:
+        service = query_parts[0]
+        if service not in AVAILABLE_SERVICES:
+            alfred_items.append(generate_alfred_item("Invalid Service", f"'{service}' is not supported", service, service, False))
+        elif num_parts < 2:
+            alfred_items.append(generate_alfred_item("Profile Required", "Please choose a profile to continue", query_str, query_str, False))
         else:
-            region = get_region_for_profile(profile)
-            service_map = {
-                'ec2': search_ec2, 
-                'rds': search_rds, 
-                'lambda': search_lambda, 
-                'sfn': search_sfn, 
-                'dynamo': search_dynamodb, 
-                'secret': search_secret,
-                'role': search_role,
-                's3': search_s3,
-                'sqs': search_sqs
-                }
-            
-            search_function = service_map.get(service)
-            if search_function:
-                alfred_items = search_function(profile, region, search_str)
+            profile = query_parts[1]
+            search_str = " ".join(query_parts[2:])
+
+            if profile not in AVAILABLE_PROFILES:
+                 alfred_items.append(generate_alfred_item("Invalid Profile", f"'{profile}' is not configured", profile, profile, False))
             else:
-                alfred_items.append(generate_alfred_item(f"Service '{service}' search not implemented yet", "", service, service, False))
+                region = get_region_for_profile(profile)
+                service_map = {
+                    'ec2': search_ec2, 
+                    'rds': search_rds, 
+                    'lambda': search_lambda, 
+                    'sfn': search_sfn, 
+                    'dynamo': search_dynamodb, 
+                    'secret': search_secret,
+                    'role': search_role,
+                    's3': search_s3,
+                    'sqs': search_sqs
+                    }
+                
+                search_function = service_map.get(service)
+                if search_function:
+                    alfred_items = search_function(profile, region, search_str)
+                else:
+                    alfred_items.append(generate_alfred_item(f"Service '{service}' search not implemented yet", "", service, service, False))
     
     # 如果最终没有结果，显示提示
     if not alfred_items:
