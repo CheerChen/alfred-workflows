@@ -82,6 +82,22 @@ def get_region_for_profile(profile):
     except subprocess.CalledProcessError:
         return DEFAULT_REGION
 
+def check_aws_credentials(profile):
+    """
+    快速检查 AWS 凭证是否有效
+    使用 aws sts get-caller-identity 命令进行轻量级验证
+    """
+    try:
+        result = subprocess.run(
+            ['aws', 'sts', 'get-caller-identity', '--profile', profile], 
+            capture_output=True, text=True, timeout=5
+        )
+        return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
+    except Exception:
+        return False
+
 def execute_aws_command(command, cache_key):
     cache_file = os.path.join(CACHE_DIR, f"{cache_key}.json")
     if os.path.exists(cache_file) and (time.time() - os.path.getmtime(cache_file)) < CACHE_EXPIRY:
@@ -115,6 +131,77 @@ def generate_alfred_item(title, subtitle, arg, uid, mods=None, valid=True, autoc
     if mods:
         item["mods"] = mods
     return item
+
+def generate_status_item(status_type, service=None, profile=None, message=None):
+    """
+    生成状态指示项
+    """
+    if status_type == "loading":
+        return generate_alfred_item(
+            title=f"🔄 Loading {service.upper()} resources from {profile}...",
+            subtitle="Fetching data from AWS API, please wait...",
+            arg="loading",
+            uid="loading-status",
+            valid=False
+        )
+    elif status_type == "credentials_invalid":
+        sso_command = f"aws sso login --profile {profile}"
+        return generate_alfred_item(
+            title="🔐 AWS Credentials Invalid",
+            subtitle=f"Press Enter to run: {sso_command}",
+            arg=sso_command,
+            uid="credentials-invalid",
+            valid=True
+        )
+    elif status_type == "credentials_checking":
+        return generate_alfred_item(
+            title=f"🔍 Checking credentials for {profile}...",
+            subtitle="Validating AWS access, please wait...",
+            arg="checking",
+            uid="credentials-checking",
+            valid=False
+        )
+    elif status_type == "profile_not_found":
+        available_profiles = ", ".join(AVAILABLE_PROFILES.keys())
+        return generate_alfred_item(
+            title="❌ Profile Not Found",
+            subtitle=f"'{profile}' not configured. Available: {available_profiles}",
+            arg="profile-error",
+            uid="profile-not-found",
+            valid=False
+        )
+    elif status_type == "service_not_supported":
+        return generate_alfred_item(
+            title="❌ Service Not Supported",
+            subtitle=f"'{service}' is not supported by this workflow",
+            arg="service-error",
+            uid="service-not-supported",
+            valid=False
+        )
+    elif status_type == "connected_ready":
+        return generate_alfred_item(
+            title=f"✅ Connected to {profile}",
+            subtitle=f"AWS credentials valid. Searching {service.upper()} resources...",
+            arg="connected",
+            uid="connected-status",
+            valid=False
+        )
+    elif status_type == "custom_error":
+        return generate_alfred_item(
+            title="❌ Error",
+            subtitle=message or "An error occurred",
+            arg="error",
+            uid="custom-error",
+            valid=False
+        )
+    else:
+        return generate_alfred_item(
+            title="Unknown Status",
+            subtitle="Unknown status type",
+            arg="unknown",
+            uid="unknown-status",
+            valid=False
+        )
 
 def handle_aws_response(data, profile=None):
     if not (isinstance(data, dict) and "error" in data):
@@ -342,7 +429,7 @@ def main():
     elif num_parts == 1 and query_str.endswith(' '):
         service = query_parts[0]
         if service not in AVAILABLE_SERVICES or service == 'his':
-            alfred_items.append(generate_alfred_item("Invalid Service", f"'{service}' is not supported", service, service, False))
+            alfred_items.append(generate_status_item("service_not_supported", service=service))
         else:
             for profile, desc in AVAILABLE_PROFILES.items():
                 alfred_items.append(generate_alfred_item(
@@ -353,16 +440,31 @@ def main():
     elif num_parts >= 2:
         service = query_parts[0]
         if service not in AVAILABLE_SERVICES:
-            alfred_items.append(generate_alfred_item("Invalid Service", f"'{service}' is not supported", service, service, False))
+            alfred_items.append(generate_status_item("service_not_supported", service=service))
         else:
             profile = query_parts[1]
             search_str = " ".join(query_parts[2:])
 
             if profile not in AVAILABLE_PROFILES:
-                 alfred_items.append(generate_alfred_item("Invalid Profile", f"'{profile}' is not configured", profile, profile, False))
+                alfred_items.append(generate_status_item("profile_not_found", profile=profile))
             else:
-                region = get_region_for_profile(profile)
-                alfred_items = search_aws_resources(service, profile, region, search_str)
+                # 预检查 AWS 凭证状态
+                if not check_aws_credentials(profile):
+                    alfred_items.append(generate_status_item("credentials_invalid", profile=profile))
+                else:
+                    # 获取实际资源数据
+                    region = get_region_for_profile(profile)
+                    alfred_items = search_aws_resources(service, profile, region, search_str)
+                    
+                    # 如果没有资源数据，显示空结果提示
+                    if not alfred_items:
+                        alfred_items.append(generate_alfred_item(
+                            title=f"No {service.upper()} resources found",
+                            subtitle=f"No {service} resources match your search in {profile} profile",
+                            arg="no-resources",
+                            uid="no-resources",
+                            valid=False
+                        ))
     
     if not alfred_items:
         alfred_items.append(generate_alfred_item("No Results", "No items match your query", query_str, query_str, False))
