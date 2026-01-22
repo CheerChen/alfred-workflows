@@ -138,7 +138,7 @@ def generate_status_item(status_type, service=None, profile=None, message=None):
     """
     if status_type == "loading":
         return generate_alfred_item(
-            title=f"🔄 Loading {service.upper()} resources from {profile}...",
+            title=f"🔄 Loading {(service or 'unknown').upper()} resources from {profile}...",
             subtitle="Fetching data from AWS API, please wait...",
             arg="loading",
             uid="loading-status",
@@ -181,7 +181,7 @@ def generate_status_item(status_type, service=None, profile=None, message=None):
     elif status_type == "connected_ready":
         return generate_alfred_item(
             title=f"✅ Connected to {profile}",
-            subtitle=f"AWS credentials valid. Searching {service.upper()} resources...",
+            subtitle=f"AWS credentials valid. Searching {(service or 'unknown').upper()} resources...",
             arg="connected",
             uid="connected-status",
             valid=False

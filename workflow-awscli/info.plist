@@ -110,9 +110,7 @@ QUERY="{query}"
 
 # Helper function to open URL in the correct Chrome profile
 open_url() {
-    # Read CHROME_PROFILE from .env file, default to "Default"
-    PROFILE=$(awk -F= '/^CHROME_PROFILE=/ {print $2}' ".env" 2&gt;/dev/null)
-    open -a "Google Chrome" -n --args --profile-directory="${PROFILE:-Default}" "$1"
+    open "$1"
 }
 
 if [[ "$QUERY" == log_and_open::* ]]; then

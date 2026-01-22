@@ -230,9 +230,7 @@
 				<integer>102</integer>
 				<key>script</key>
 				<string>if [[ "{query}" == http* ]]; then
-
-PROFILE=$(awk -F= '/^CHROME_PROFILE=/ {print $2}' ".env"); open -a "Google Chrome" -n --args --profile-directory="${PROFILE:-Default}" "{query}"
-
+    open "{query}"
 fi</string>
 				<key>scriptargtype</key>
 				<integer>0</integer>
