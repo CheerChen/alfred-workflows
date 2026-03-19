@@ -17,6 +17,7 @@ AVAILABLE_SERVICES = {
     "sfn": " Step Functions",
     "secret": " Secrets Manager",
     "role": " IAM Roles",
+    "policy": " IAM Policies (Customer Managed)",
     "s3": " S3 buckets",
     "sqs": " SQS queues",
     "his": " History of accessed resources"
@@ -317,6 +318,16 @@ def search_aws_resources(service, profile, region, search_str):
             'get_item_data': lambda item: {
                 'id': item.get('Name'), 'name': item.get('Name'),
                 'extra_info': f"Created: {item.get('CreationDate', '')[:10] if item.get('CreationDate') else 'N/A'}"
+            }
+        },
+        'policy': {
+            'command': ['aws', 'iam', 'list-policies', '--profile', profile, '--scope', 'Local', '--query', 'Policies[]'],
+            'url_template': f"https://console.aws.amazon.com/iam/home#/policies/{{encoded_id}}",
+            'extract_items': lambda data: data if data else [],
+            'get_item_data': lambda item: {
+                'id': item.get('Arn'), 'name': item.get('PolicyName'),
+                'extra_info': f"Attachments: {item.get('AttachmentCount', 0)} | Updated: {item.get('UpdateDate', 'N/A')[:10] if item.get('UpdateDate') else 'N/A'}",
+                'encoded_id': urllib.parse.quote(item.get('Arn', ''), safe='') if item.get('Arn') else ''
             }
         },
         'sqs': {
