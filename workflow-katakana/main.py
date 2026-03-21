@@ -133,10 +133,99 @@ def jisho_search_with_pagination(word, page=1):
         print(f"Jisho API 错误 (page {page}): {str(e)}", file=sys.stderr)
         return None
 
+def is_cjk_input(text):
+    """检查输入是否包含CJK汉字"""
+    return bool(re.search(r'[\u4e00-\u9fff]', text))
+
+def simplified_to_japanese(text):
+    """将简体中文转换为日语汉字"""
+    mapping_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sc2jp.json')
+    try:
+        with open(mapping_file, 'r', encoding='utf-8') as f:
+            mapping = json.load(f)
+    except Exception:
+        return text
+    return ''.join(mapping.get(c, c) for c in text)
+
+def main_kanji(query):
+    """汉字查读音模式"""
+    start_total_time = time.time()
+
+    jp_query = simplified_to_japanese(query)
+    print(f"DEBUG: Kanji mode: '{query}' -> '{jp_query}'", file=sys.stderr)
+
+    # 同时搜原始输入和转换后的，去重
+    queries = [jp_query]
+    if jp_query != query:
+        queries.append(query)
+
+    items = []
+    seen = set()
+
+    for q in queries:
+        data = jisho_search(q)
+        if not data:
+            continue
+
+        for entry in data:
+            if not entry.get('japanese') or not entry.get('senses'):
+                continue
+
+            for jp in entry['japanese']:
+                word = jp.get('word', '')
+                reading = jp.get('reading', '')
+                if not reading:
+                    continue
+
+                # 匹配：汉字写法包含查询词，或查询词包含汉字写法
+                if not word:
+                    continue
+                if jp_query not in word and word not in jp_query and query not in word and word not in query:
+                    continue
+
+                key = f"{word}:{reading}"
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                subtitle_parts = []
+                for sense in entry['senses']:
+                    pos = ", ".join(sense.get('parts_of_speech', []))
+                    defs = "; ".join(sense.get('english_definitions', []))
+                    part = ""
+                    if pos:
+                        part += f"[{pos}] "
+                    part += defs
+                    subtitle_parts.append(part)
+
+                subtitle = " | ".join(subtitle_parts[:2])
+
+                items.append({
+                    "title": f"{reading}（{word}）",
+                    "subtitle": subtitle,
+                    "arg": reading,
+                    "text": {
+                        "copy": reading,
+                        "largetype": f"{reading}\n{word}"
+                    }
+                })
+
+    if not items:
+        items.append({"title": "未找到结果", "subtitle": f"'{query}' → '{jp_query}'"})
+
+    print(json.dumps({"items": items}))
+
+    end_total_time = time.time()
+    print(f"DEBUG: Total execution time: {end_total_time - start_total_time:.3f} seconds", file=sys.stderr)
+
 def main(query):
     """主函数"""
     start_total_time = time.time()
-    
+
+    if is_cjk_input(query):
+        main_kanji(query)
+        return
+
     data = jisho_search(query)
     
     if not data:
