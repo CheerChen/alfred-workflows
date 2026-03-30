@@ -137,27 +137,40 @@ def is_cjk_input(text):
     """检查输入是否包含CJK汉字"""
     return bool(re.search(r'[\u4e00-\u9fff]', text))
 
-def simplified_to_japanese(text):
-    """将简体中文转换为日语汉字"""
+def simplified_to_japanese_candidates(text):
+    """将简体中文转换为日语汉字，返回所有可能的候选组合"""
     mapping_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sc2jp.json')
     try:
         with open(mapping_file, 'r', encoding='utf-8') as f:
             mapping = json.load(f)
     except Exception:
-        return text
-    return ''.join(mapping.get(c, c) for c in text)
+        return [text]
+
+    # 为每个字构建候选列表
+    char_candidates = []
+    for c in text:
+        mapped = mapping.get(c, c)
+        if isinstance(mapped, list):
+            char_candidates.append(mapped)
+        else:
+            char_candidates.append([mapped])
+
+    # 生成所有组合
+    results = ['']
+    for candidates in char_candidates:
+        results = [r + c for r in results for c in candidates]
+
+    return results
 
 def main_kanji(query):
     """汉字查读音模式"""
     start_total_time = time.time()
 
-    jp_query = simplified_to_japanese(query)
-    print(f"DEBUG: Kanji mode: '{query}' -> '{jp_query}'", file=sys.stderr)
+    jp_candidates = simplified_to_japanese_candidates(query)
+    print(f"DEBUG: Kanji mode: '{query}' -> {jp_candidates}", file=sys.stderr)
 
-    # 同时搜原始输入和转换后的，去重
-    queries = [jp_query]
-    if jp_query != query:
-        queries.append(query)
+    # 收集所有要搜索的查询词：所有候选 + 原始输入（去重）
+    queries = list(dict.fromkeys(jp_candidates + [query]))
 
     items = []
     seen = set()
@@ -180,7 +193,11 @@ def main_kanji(query):
                 # 匹配：汉字写法包含查询词，或查询词包含汉字写法
                 if not word:
                     continue
-                if jp_query not in word and word not in jp_query and query not in word and word not in query:
+                match = any(
+                    c in word or word in c
+                    for c in jp_candidates
+                )
+                if not match and query not in word and word not in query:
                     continue
 
                 key = f"{word}:{reading}"
@@ -211,7 +228,7 @@ def main_kanji(query):
                 })
 
     if not items:
-        items.append({"title": "未找到结果", "subtitle": f"'{query}' → '{jp_query}'"})
+        items.append({"title": "未找到结果", "subtitle": f"'{query}' → {jp_candidates}"})
 
     print(json.dumps({"items": items}))
 
