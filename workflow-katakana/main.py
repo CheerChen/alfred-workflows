@@ -193,6 +193,9 @@ def main_kanji(query):
                 # 匹配：汉字写法包含查询词，或查询词包含汉字写法
                 if not word:
                     continue
+                # 多字查询时，过滤掉比查询短的结果
+                if len(query) > 1 and len(word) < len(query):
+                    continue
                 match = any(
                     c in word or word in c
                     for c in jp_candidates
