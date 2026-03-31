@@ -20,7 +20,8 @@ AVAILABLE_SERVICES = {
     "policy": " IAM Policies (Customer Managed)",
     "s3": " S3 buckets",
     "sqs": " SQS queues",
-    "his": " History of accessed resources"
+    "his": " History of accessed resources",
+    "clean": " Clear all cached AWS data"
 }
 
 AVAILABLE_PROFILES = {
@@ -262,13 +263,13 @@ def search_aws_resources(service, profile, region, search_str):
             }
         },
         'rds': {
-            'command': ['aws', 'rds', 'describe-db-instances', '--profile', profile, '--region', region, '--query', 'DBInstances[]'],
-            'url_template': f"https://{region}.console.aws.amazon.com/rds/home?region={region}#database:id={{id}};is-cluster=false",
+            'command': ['aws', 'rds', 'describe-db-clusters', '--profile', profile, '--region', region, '--query', 'DBClusters[]'],
+            'url_template': f"https://{region}.console.aws.amazon.com/rds/home?region={region}#database:id={{id}};is-cluster=true",
             'extract_items': lambda data: data if data else [],
             'get_item_data': lambda item: {
-                'id': item.get('DBInstanceIdentifier'),
-                'name': item.get('DBInstanceIdentifier'),
-                'extra_info': f"Status: {item.get('DBInstanceStatus')} | Engine: {item.get('Engine')}"
+                'id': item.get('DBClusterIdentifier'),
+                'name': item.get('DBClusterIdentifier'),
+                'extra_info': f"Status: {item.get('Status')} | Engine: {item.get('Engine')}"
             }
         },
         'lambda': {
@@ -376,7 +377,11 @@ def search_aws_resources(service, profile, region, search_str):
         mods = {
             "cmd": {
                 "valid": True, "arg": destination_url,
-                "subtitle": "⌘ Hold Cmd+Enter to copy URL to clipboard"
+                "subtitle": "⌘ Copy URL to clipboard"
+            },
+            "alt": {
+                "valid": True, "arg": item_data['name'] or item_data['id'],
+                "subtitle": "⌥ Copy resource name to clipboard"
             }
         }
         
@@ -395,7 +400,29 @@ def main():
     num_parts = len(query_parts)
     alfred_items = []
 
-    if num_parts > 0 and query_parts[0] == 'his':
+    if num_parts > 0 and query_parts[0] == 'clean':
+        # 清除所有缓存的 JSON 文件
+        cache_files = [f for f in os.listdir(CACHE_DIR) if f.endswith('.json')]
+        if cache_files:
+            for f in cache_files:
+                os.remove(os.path.join(CACHE_DIR, f))
+            alfred_items.append(generate_alfred_item(
+                title=f"✅ Cache Cleared",
+                subtitle=f"Removed {len(cache_files)} cached file(s)",
+                arg="cache-cleared",
+                uid="cache-cleared",
+                valid=False
+            ))
+        else:
+            alfred_items.append(generate_alfred_item(
+                title="No Cache to Clear",
+                subtitle="Cache directory is already empty",
+                arg="no-cache",
+                uid="no-cache",
+                valid=False
+            ))
+
+    elif num_parts > 0 and query_parts[0] == 'his':
         history_file = os.path.join(CACHE_DIR, "aws_history.log")
         if not os.path.exists(history_file):
             alfred_items.append(generate_alfred_item("No History", "You haven't opened any resources yet.", "no_history", "no_history", False))
