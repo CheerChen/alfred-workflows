@@ -3,6 +3,7 @@ import sys
 import json
 import subprocess
 import os
+import shutil
 import time
 import urllib.parse
 import configparser
@@ -48,6 +49,34 @@ if not os.path.exists(CACHE_DIR):
     os.makedirs(CACHE_DIR)
 
 # --- 函数部分 ---
+def find_awscli():
+    """
+    Locate the `aws` binary. Alfred's bash runs with a minimal PATH, so we also
+    probe common Homebrew / system locations.
+    """
+    candidate = shutil.which('aws')
+    if candidate:
+        return candidate
+    for path in ('/opt/homebrew/bin/aws', '/usr/local/bin/aws', '/usr/bin/aws'):
+        if os.path.exists(path) and os.access(path, os.X_OK):
+            return path
+    return None
+
+def is_profile_configured(profile):
+    """
+    Check whether `profile <name>` exists in ~/.aws/config.
+    Returns False if the file is missing or the section is absent.
+    """
+    config_path = os.path.expanduser('~/.aws/config')
+    if not os.path.exists(config_path):
+        return False
+    config = configparser.ConfigParser()
+    try:
+        config.read(config_path)
+    except configparser.Error:
+        return False
+    return config.has_section(f"profile {profile}")
+
 def get_sso_start_url(profile):
     """
     Parses ~/.aws/config to find the sso_start_url for a given profile.
@@ -56,7 +85,7 @@ def get_sso_start_url(profile):
     config_path = os.path.expanduser('~/.aws/config')
     if not os.path.exists(config_path):
         return None
-    
+
     config.read(config_path)
     
     profile_section_name = f"profile {profile}"
@@ -171,6 +200,15 @@ def generate_status_item(status_type, service=None, profile=None, message=None):
             arg="profile-error",
             uid="profile-not-found",
             valid=False
+        )
+    elif status_type == "profile_not_configured":
+        configure_command = f"aws configure sso --profile {profile}"
+        return generate_alfred_item(
+            title=f"⚙️  AWS profile '{profile}' not configured",
+            subtitle=f"Press Enter to run: {configure_command}",
+            arg=configure_command,
+            uid="profile-not-configured",
+            valid=True
         )
     elif status_type == "service_not_supported":
         return generate_alfred_item(
@@ -400,6 +438,17 @@ def main():
     num_parts = len(query_parts)
     alfred_items = []
 
+    if not find_awscli():
+        alfred_items.append(generate_alfred_item(
+            title="❌ AWS CLI not installed",
+            subtitle="Press Enter to install via Homebrew: brew install awscli",
+            arg="brew install awscli",
+            uid="awscli-missing",
+            valid=True
+        ))
+        print(json.dumps({"items": alfred_items}))
+        return
+
     if num_parts > 0 and query_parts[0] == 'clean':
         # 清除所有缓存的 JSON 文件
         cache_files = [f for f in os.listdir(CACHE_DIR) if f.endswith('.json')]
@@ -485,6 +534,8 @@ def main():
 
             if profile not in AVAILABLE_PROFILES:
                 alfred_items.append(generate_status_item("profile_not_found", profile=profile))
+            elif not is_profile_configured(profile):
+                alfred_items.append(generate_status_item("profile_not_configured", profile=profile))
             else:
                 # 预检查 AWS 凭证状态
                 if not check_aws_credentials(profile):

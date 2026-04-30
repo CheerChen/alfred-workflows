@@ -112,6 +112,9 @@
 # This script is intended to be pasted into the Alfred workflow's action script field.
 # It handles opening AWS console URLs, logging them to a history file, and executing SSO login commands.
 
+# Alfred runs with a minimal PATH; ensure Homebrew/system aws locations are visible.
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
 DATA_DIR="${alfred_workflow_data:-$HOME/.alfred_workflow_data}"
 HISTORY_FILE="$DATA_DIR/aws_history.log"
 mkdir -p "$DATA_DIR"
@@ -141,11 +144,33 @@ elif [[ "$QUERY" == http* ]]; then
     # Just open it, don't re-log it.
     open_url "$QUERY"
 
+elif [[ "$QUERY" == "aws configure"* ]]; then
+    # Interactive AWS CLI commands (e.g. `aws configure sso ...`) need a real TTY.
+    if ! command -v aws &gt;/dev/null 2&gt;&amp;1; then
+        osascript -e 'display alert "AWS CLI not installed" message "Install with: brew install awscli" as critical'
+        exit 1
+    fi
+    osascript -e "tell app \"Terminal\" to do script \"$QUERY\"" \
+              -e 'tell app "Terminal" to activate'
+
 elif [[ "$QUERY" == aws* ]]; then
     # This is a command, e.g., for SSO login or a combined login+open command.
+    if ! command -v aws &gt;/dev/null 2&gt;&amp;1; then
+        osascript -e 'display alert "AWS CLI not installed" message "Install with: brew install awscli" as critical'
+        exit 1
+    fi
     echo "Executing: $QUERY"
     # The command is executed directly.
     eval $QUERY
+
+elif [[ "$QUERY" == "brew install awscli" ]]; then
+    # Triggered when the Script Filter detects awscli is missing.
+    if ! command -v brew &gt;/dev/null 2&gt;&amp;1; then
+        osascript -e 'display alert "Homebrew not installed" message "Install Homebrew first: https://brew.sh" as critical'
+        exit 1
+    fi
+    osascript -e 'tell app "Terminal" to do script "brew install awscli"' \
+              -e 'tell app "Terminal" to activate'
 fi</string>
 				<key>scriptargtype</key>
 				<integer>0</integer>
