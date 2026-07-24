@@ -44,9 +44,14 @@ repos=$(gh api /user/repos --method GET \
   --jq ".[] | $item" | grep -i "$query")
 
 if [[ -z "$repos" ]]; then
+  search_query="$query in:name archived:false"
+  if [[ -n "$GITHUB_ORG" ]]; then
+    search_query="org:$GITHUB_ORG $search_query"
+  fi
+
   repos=$(gh api /search/repositories --method GET \
     --hostname "$API_HOST" \
-    -f q="$query in:name archived:false" \
+    -f q="$search_query" \
     -F per_page=9 \
     -f sort=pushed \
     --cache "$CACHE_SEARCH_REPOS" \

@@ -27,6 +27,7 @@ fi
 
 # Set defaults if not loaded from .env
 export API_HOST=${API_HOST:-github.com}
+export GITHUB_ORG=${GITHUB_ORG:-}
 export CACHE_PULLS=${CACHE_PULLS:-10m}
 export CACHE_SEARCH_REPOS=${CACHE_SEARCH_REPOS:-24h}
 export CACHE_USER_REPOS=${CACHE_USER_REPOS:-72h}
