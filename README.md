@@ -42,10 +42,19 @@ The `install.sh` script:
 - **workflow-awscli**: Extended AWS CLI functionality  
 - **workflow-gh**: GitHub CLI integration
 - **workflow-katakana**: Japanese katakana conversion tools
+- **workflow-furi**: Japanese furigana annotation + TTS
 
 ## Usage
 
 After installation, the workflows will appear in Alfred and can be used immediately.
+
+### workflow-furi
+
+Converts Japanese words, phrases, or sentences into furigana-annotated text (e.g. `傾きを測る` → `傾(かたむ)きを測(はか)る`) and reads them aloud.
+
+- `furi 傾きを測る` — shows the annotated text; **Enter** to copy, **⌘+Enter** to hear it spoken (macOS "Kyoko" voice)
+- Runs fully offline via [fugashi](https://github.com/polm/fugashi) + UniDic, resolved on the fly with `uv`
+- Readings are cached indefinitely under Alfred's workflow data directory
 
 ### Configuration
 
@@ -85,3 +94,4 @@ To add a new workflow:
 - macOS
 - Alfred with Powerpack
 - Git (for cloning and updates)
+- [uv](https://docs.astral.sh/uv/) (for workflow-furi's Python dependencies)
